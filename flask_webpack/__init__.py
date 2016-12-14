@@ -1,6 +1,17 @@
+from importlib import import_module
 import json
 
 from flask import current_app
+
+
+def load_manifest(app, manifest_filename):
+    try:
+        with app.open_resource(manifest_filename, 'r') as stats_json:
+            return json.load(stats_json)
+    except IOError:
+        raise RuntimeError(
+            "Flask-Webpack requires 'WEBPACK_MANIFEST_PATH' to be set and "
+            "it must point to a valid json file.")
 
 
 class Webpack(object):
@@ -23,6 +34,10 @@ class Webpack(object):
         app.config.setdefault('WEBPACK_MANIFEST_PATH',
                               '/tmp/themostridiculousimpossiblepathtonotexist')
         app.config.setdefault('WEBPACK_ASSETS_URL', None)
+        app.config.setdefault(
+            'WEBPACK_MANIFEST_LOAD_FUNCTION',
+            'flask_webpack.load_manifest',
+        )
 
         self._set_asset_paths(app)
 
@@ -53,21 +68,23 @@ class Webpack(object):
         :return: None
         """
         webpack_stats = app.config['WEBPACK_MANIFEST_PATH']
+        loader_path = app.config['WEBPACK_MANIFEST_LOAD_FUNCTION']
 
         try:
-            with app.open_resource(webpack_stats, 'r') as stats_json:
-                stats = json.load(stats_json)
-
-                if app.config['WEBPACK_ASSETS_URL']:
-                    self.assets_url = app.config['WEBPACK_ASSETS_URL']
-                else:
-                    self.assets_url = stats['publicPath']
-
-                self.assets = stats['assets']
-        except IOError:
+            module_path, func_name = loader_path.rsplit('.', 1)
+            module = import_module(module_path)
+            stats = getattr(module, func_name)(app, webpack_stats)
+        except (ImportError, AttributeError):
             raise RuntimeError(
-                "Flask-Webpack requires 'WEBPACK_MANIFEST_PATH' to be set and "
-                "it must point to a valid json file.")
+                "WEBPACK_MANIFEST_LOAD_FUNCTION is incorrectly specified."
+            )
+
+        if app.config['WEBPACK_ASSETS_URL']:
+            self.assets_url = app.config['WEBPACK_ASSETS_URL']
+        else:
+            self.assets_url = stats['publicPath']
+
+        self.assets = stats['assets']
 
     def _refresh_webpack_stats(self):
         """
